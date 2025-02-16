@@ -1,4 +1,16 @@
-﻿namespace PacketMode.NetType
+﻿using GensokyoWPNACC.PacketMode.NetInterface;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using Terraria.ID;
+using Terraria;
+using Terraria.ModLoader;
+using static GensokyoWPNACC.PacketMode.NetType.OneLoading;
+using System.IO;
+
+namespace GensokyoWPNACC.PacketMode.NetType
 {
     [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
     public class PlayerTestAttrbute : Attribute { }
@@ -10,11 +22,14 @@
     /// <typeparam name="PT"> ModPlayer的类型 全局直接传入ModPlayer </typeparam>
     /// <typeparam name="FIT"> 字段的特性 </typeparam>
     /// <typeparam name="POT"> 属性的特性 </typeparam>
-    public sealed class NetPlayer/*<FIT, POT>*/ : Net<ModPlayer, Attribute, Attribute> 
+    public sealed class NetPlayer/*<FIT, POT>*/ /*: Net<ModPlayer, Attribute, Attribute> */
         //where FIT : Attribute
         //where POT : Attribute
     {
         private NetPlayer() { }
+
+        #region 属性
+        private List<Tuple<int, Type>> Types { get; } = [];
 
         /// <summary>
         /// 给定类型的全部字段
@@ -87,19 +102,18 @@
         /// 获取ModPlayer的方法字典，使用ModPlyaer的类型获取
         /// </summary>
         public static Dictionary<Type, MethodInfo> PlayerGenericMethod { get; set; } = [];
+        #endregion 属性
 
+        private static NetPlayer _netplayer = new NetPlayer();
         public static NetPlayer GetNetPlayer()
         {
-            var e = new NetPlayer/*<FIT, POT>*/();/*
-            FITAttribute.Add(typeof(FIT));
-            POTAttribute.Add(typeof(POT));*/
-            e.InitializeData();
-            return e;            
+            _netplayer?.InitializeData();
+            return _netplayer;            
         }
-        public override void WritePackets()
+        /*public override void WritePackets()
         {
             
-        }
+        }*/
 
         private bool IsInitialize = false;
 
@@ -114,12 +128,13 @@
         ///     7. 用户自行调用LoadUseField方法 将创建的NetFP加载入字典
         ///     8. 用户自定调用LoadUseCommandMap方法，用于创建联机同步的索引映射字典
         /// </summary>
-        public override void InitializeData()
+        public /*override*/ void InitializeData()
         {
             if (IsInitialize)
                 return;
             IsInitialize = true;
-            base.InitializeData();
+            LoadTypes();
+            //base.InitializeData();
             InitializeFPA();    //初始化全部字段与属性
             LoadFPA();          //加载全部字段和属性
             LoadPlayerGenericMethod();
@@ -136,8 +151,7 @@
             //pt.Write(Main.myPlayer);
             //pt.Write(typeIndex);
             //pt.Write(commandIndex);
-            NetMessageType MessageType = (NetMessageType)reader.ReadInt32();
-            if (MessageType == NetMessageType.Player && Main.netMode == NetmodeID.Server)
+            if (Main.netMode == NetmodeID.Server)
             {
                 if (NetPlayerFinallyTask(reader, out List<int> server, out object player, out List<MemberInfo> list))
                 {
@@ -158,7 +172,36 @@
             {
                 if (NetPlayerFinallyTask(reader, out List<int> server, out object player, out List<MemberInfo> list))
                 {
-                    foreach (var value in Reader(reader, player, list));
+                    //CombatText.NewText
+                    //int num = 0; // todo delete
+                    //Main.NewText("[c/80ffff:--------------------------------------]");
+                    foreach (var value in Reader(reader, player, list))
+                    {
+                        //Main.NewText(list[num].Name + ": " + value);
+                        //num++;
+                    }
+
+                    #region todo Delete Test
+                    //todo Delete
+                    /*
+                    for (int i = 0; i < server.Count; i++)
+                    {
+                        if(i == 0)
+                        {
+                            Main.NewText($"玩家名称: {Main.player[server[i]].name}");
+                        }else if (i == 1)
+                        {
+                            TypeMap.TryGetValue(server[i], out Type type);
+                            Main.NewText($"ModPlayer类型名称: {type.Name}");
+                        }else
+                        {
+                            CommandMap.TryGetValue(server[i], out string command);
+                            Main.NewText($"用户自定义指令名称: {command}");
+                        }
+                    }
+                    Main.NewText("[c/80ffff:--------------------------------------]");
+                    */
+                    #endregion todo Delete Test
                 }
             }
         }
@@ -206,25 +249,8 @@
             return true;
         }
 
-        /// <summary>
-        /// 给定流，使用读取的方式，全部释放
-        /// </summary>
-        public static void ClearStream(BinaryReader reader)
-        {
-            //while (true)
-            //{
-                reader.BaseStream.Position = reader.BaseStream.Length;
-                //long currentPos = reader.BaseStream.Position;
-                //long sumLength = reader.BaseStream.Length;
-                //if (currentPos <= sumLength)
-                //    reader.ReadByte();
-                //else
-                //    break;
-            //}
-        }
-
-        public static MethodInfo GetModPlayerMethod { get; set; } = null;
-        public static bool IsStartNetPlayer = false;
+        private static MethodInfo GetModPlayerMethod { get; set; } = null;
+        private static bool IsStartNetPlayer = false;
         /// <summary>
         /// 调用此方法，启动玩家同步线程
         /// </summary>
@@ -235,26 +261,26 @@
 
             IsStartNetPlayer = true;
             LoadGetPlayerMethod();
-            //ThreadStart thread = delegate{ };
-            //thread += NetPlayerTask;
             if (Main.netMode != NetmodeID.Server)
             {
-                if (NetPlayerThread == null)
-                {
-                    NetPlayerThread = new Thread(NetPlayerTask);
-                }
+                NetPlayerThread ??= new Thread(NetPlayerTask);
+                NetPlayerThread.IsBackground = true; //后台线程
                 NetPlayerThread.Start();
             }
         }
 
+
         /// <summary>
         /// 用作线程的委托方法，时刻检查用户定义字段的值
         /// </summary>
-        public static void NetPlayerTask()
+        private static void NetPlayerTask()
         {
             while (true)
             {
                 Thread.Sleep(17);
+                if (GensokyoWPNACC.cts.IsCancellationRequested)
+                    break;
+
                 if (Main.netMode != NetmodeID.MultiplayerClient)
                     continue;
 
@@ -287,7 +313,7 @@
         /// <summary>
         /// 加载GetPlayerMethod的方法引用
         /// </summary>
-        public static void LoadGetPlayerMethod()
+        private static void LoadGetPlayerMethod()
         {
             if (GetModPlayerMethod == null)
             {
@@ -304,7 +330,7 @@
         /// <summary>
         /// 加载ModPlayer类型对应的Get方法
         /// </summary>
-        public void LoadPlayerGenericMethod()
+        private void LoadPlayerGenericMethod()
         {
             LoadGetPlayerMethod();
             foreach (var IType in Types)
@@ -317,7 +343,7 @@
         /// <summary>
         /// 给定一个ModPlayer，一个Field(用户自定义字段) 返回该字段对应的同步属性与字段
         /// </summary>
-        public static bool GetNetMemberInfo(object modPlayer, FieldInfo useField, out List<MemberInfo> memberinfos)
+        private static bool GetNetMemberInfo(object modPlayer, FieldInfo useField, out List<MemberInfo> memberinfos)
         {
             if(UseNetFields.TryGetValue(Tuple.Create(modPlayer.GetType(), useField.Name), out memberinfos))
                 return true;
@@ -328,7 +354,7 @@
         /// 给定一个ModPlyaer，一个MemberInfo(需要同步的属性与字段) 将该属性/字段列表写入包并发往服务器
         /// </summary>
         /// <param name="useField"> 用户自定义字段 </param>
-        public static void SendMemberInfo(object modPlayer, List<MemberInfo> memberinfos, FieldInfo useField)
+        private static void SendMemberInfo(object modPlayer, List<MemberInfo> memberinfos, FieldInfo useField)
         {
             Type playerType = modPlayer.GetType();
             ModPacket pt = ModLoader.GetMod(modPlayer.GetType().Namespace.Split(".")[0]).GetPacket();
@@ -461,39 +487,6 @@
             }
         }
 
-        /// <summary>
-        /// 给定一个字段集合，将字段加入给定集合 不会重复添加
-        /// </summary>
-        public static void AddFieldInfoToList(List<FieldInfo> infos, List<MemberInfo> list)
-        {
-            foreach (FieldInfo info in infos)
-            {
-                if(list.FirstOrDefault(f =>
-                {
-                    if (f is FieldInfo filed)
-                        return filed == info;
-                    return false;
-                }) == null)
-                    list.Add(info);
-            }
-        }
-
-        /// <summary>
-        /// 给定一个属性集合，将属性加入给定集合 不会重复添加
-        /// </summary>
-        public static void AddPropertyInfoToList(List<PropertyInfo> infos, List<MemberInfo> list)
-        {
-            foreach (PropertyInfo info in infos)
-            {
-                if (list.FirstOrDefault(f =>
-                {
-                    if (f is PropertyInfo property)
-                        return property == info;
-                    return false;
-                }) == null)
-                    list.Add(info);
-            }
-        }
 
         /// <summary>
         /// 使用类型和特性，获取该类型下被给定特性标记的属性和字段(需要使用is / as)，适用于局部UseNet字段
@@ -569,6 +562,16 @@
                 var type = iType.Item2;
                 OneLoading.GetFields(type, PAFields);
                 GetPropertys(type, PAProperty);
+            }
+        }
+
+        private void LoadTypes()
+        {
+            int num = 0;
+            foreach (var type in GetExtendTypeClass(typeof(ModPlayer)))
+            {
+                Types.Add(Tuple.Create(num, type));
+                num++;
             }
         }
 

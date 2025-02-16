@@ -39,13 +39,11 @@ namespace GensokyoWPNACC.PacketMode.NetType
         private void HookSendMethod(HookSend orig, ModProjectile obj, BinaryWriter writer)
         {
             SendMethod(obj, writer);
-            orig.Invoke(obj, writer);
         }
 
         private void HookReceiveMethod(HookBinaryReader orig, ModProjectile obj, BinaryReader reader)
         {
             ReceiveMethod(obj, reader);
-            orig.Invoke(obj, reader);
         }
 
         /// <summary>

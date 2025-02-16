@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using Terraria;
 using Terraria.ModLoader;
 using Terraria.ModLoader.Core;
 using static GensokyoWPNACC.PacketMode.NetType.OneLoading;
@@ -51,6 +53,9 @@ namespace GensokyoWPNACC.PacketMode.NetInterface
                 };
             }
 
+            int a = 0;
+            Main.NewText(a);
+
         }
 
         /// <summary>
@@ -58,21 +63,26 @@ namespace GensokyoWPNACC.PacketMode.NetInterface
         /// </summary>
         protected void InitializeFAP()
         {
-            Types.ForEach(tuple =>
+            foreach (var tuple in Types)
             {
                 Type type = tuple.Item2;
-                var fields = type.GetFields(CanReflectionWell()).Where(field => field.GetCustomAttribute<FieldAttribute>() != null && TypeCheck(field));
+                var fields =
+                    type
+                        .GetFields(CanReflectionWell())
+                        .Where(field => field.GetCustomAttribute<FieldAttribute>() != null && TypeCheck(field));
                 if (fields.Count() >= 1)
                 {
                     Fields.Add(type, fields.ToList());
                 }
-
-                var propertys = type.GetProperties(CanReflectionWell()).Where(proper => proper.GetCustomAttribute<PropertyAttribute>() != null && TypeCheck(proper));
+                var propertys =
+                    type
+                        .GetProperties(CanReflectionWell())
+                        .Where(proper => proper.GetCustomAttribute<PropertyAttribute>() != null && TypeCheck(proper));
                 if (propertys.Count() >= 1)
                 {
                     Propertys.Add(type, propertys.ToList());
                 }
-            });
+            }
         }
 
         protected void SendMethod(object obj, BinaryWriter writer)
@@ -103,5 +113,7 @@ namespace GensokyoWPNACC.PacketMode.NetInterface
     public enum NetMessageType
     {
         Player = 1,
+        GNPC = 2,
+        杂项 = 999,
     }
 }

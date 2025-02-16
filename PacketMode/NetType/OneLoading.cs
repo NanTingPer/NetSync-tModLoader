@@ -1,4 +1,4 @@
-﻿using GensokyoWPNACC.Global;
+﻿
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
-using static GensokyoWPNACC.Global.TestModPlayer;
+using Terraria.ModLoader.Core;
 
 namespace GensokyoWPNACC.PacketMode.NetType
 {
@@ -35,17 +35,24 @@ namespace GensokyoWPNACC.PacketMode.NetType
 
             NetProjectile.NetProjectiles.InitializeData();
             var r =  NetPlayer.GetNetPlayer();
-            //r.CrateNetFP<WPNACCPlayer, PlayerTestAttrbute, PlayerTestAttrbute>("同步测试");
-            r.CrateNetFP<TestModPlayer, NetPlayerTestAttribute, NetPlayerTestAttribute>("同步字段");
+
+            r.CrateNetFP<WPNACCPlayer, PlayerTestAttrbute, PlayerTestAttrbute>("同步测试");
             r.LoadUseField();
             r.LoadUseCommandMap();
+
+            var GNPC = NetGlobalNPC.GetNetGlobalNPC;
+            GNPC.CreateUseField<WPNACCNPC, GNPCTestAttribute, GNPCTestAttribute>("NetAsyncField");
+
+
             base.Load();
         }
 
         public static Thread NetPlayerThread { get; set; } = null;
+        public static Thread NetGlobalNPCThread { get; set; } = null;
         public override void PostAddRecipes()
         {
             NetPlayer.StartNetPlayer(); //启动线程
+            NetGlobalNPC.StartGlobalNPCThread();
             base.PostAddRecipes();
         }
 
@@ -53,12 +60,12 @@ namespace GensokyoWPNACC.PacketMode.NetType
         /// <summary>
         /// 使用类型拿取方法，存放Reader的方法
         /// </summary>
-        public static Dictionary<Type, MethodInfo> ReaderMethodInfo = [];
+        public static Dictionary<Type, MethodInfo> ReaderMethodInfo { get; } = [];
 
         /// <summary>
         /// 使用类型拿取方法，存放Writer的方法
         /// </summary>
-        public static Dictionary<Type, MethodInfo> WriterMethodInfo = [];
+        public static Dictionary<Type, MethodInfo> WriterMethodInfo { get; } = [];
 
         /// <summary>
         /// 获取万用反射条件
@@ -99,6 +106,15 @@ namespace GensokyoWPNACC.PacketMode.NetType
 
 
         #region Reader的工具方法
+        /// <summary>
+        /// 给定流，使用读取的方式，全部释放
+        /// </summary>
+        public static void ClearStream(BinaryReader reader)
+        {
+            reader.BaseStream.Position = reader.BaseStream.Length;
+        }
+
+
         /// <summary>
         /// 给定一个流，给定一个对象，给定一个字段列表，读取并设置对象相应字段的值，返回该值
         /// </summary>
@@ -340,7 +356,51 @@ namespace GensokyoWPNACC.PacketMode.NetType
         }
         #endregion Write的工具方法
 
-        #region 获取类型的字段和属性 并加入
+        #region 反射的辅助方法
+        /// <summary>
+        /// 获取继承给定类型的全部类型
+        /// </summary>
+        public static IEnumerable<Type> GetExtendTypeClass(Type type)
+        {
+            Type[] types = AssemblyManager.GetLoadableTypes(typeof(OneLoading).Assembly);
+            return types.Where(typer => typer.IsSubclassOf(type) /*type.BaseType == type.GetType()*/);
+        }
+
+
+        /// <summary>
+        /// 给定一个字段集合，将字段加入给定集合 不会重复添加
+        /// </summary>
+        public static void AddFieldInfoToList(List<FieldInfo> infos, List<MemberInfo> list)
+        {
+            foreach (FieldInfo info in infos)
+            {
+                if (list.FirstOrDefault(f =>
+                {
+                    if (f is FieldInfo filed)
+                        return filed == info;
+                    return false;
+                }) == null)
+                    list.Add(info);
+            }
+        }
+
+        /// <summary>
+        /// 给定一个属性集合，将属性加入给定集合 不会重复添加
+        /// </summary>
+        public static void AddPropertyInfoToList(List<PropertyInfo> infos, List<MemberInfo> list)
+        {
+            foreach (PropertyInfo info in infos)
+            {
+                if (list.FirstOrDefault(f =>
+                {
+                    if (f is PropertyInfo property)
+                        return property == info;
+                    return false;
+                }) == null)
+                    list.Add(info);
+            }
+        }
+
         /// <summary>
         /// 给定一个类型，给定一个列表，将类型的字段加入列表
         /// </summary>
@@ -349,6 +409,18 @@ namespace GensokyoWPNACC.PacketMode.NetType
             foreach (var field in type.GetFields(CanReflectionWell()))
             {
                 if(list.FirstOrDefault(f => f == field) == null)
+                    list.Add(field);
+            }
+        }
+
+        /// <summary>
+        /// 给定一个类型，给定一个列表，将类型的字段加入列表
+        /// </summary>
+        public static void GetFields(Type type, IList<MemberInfo> list)
+        {
+            foreach (var field in type.GetFields(CanReflectionWell()))
+            {
+                if (list.FirstOrDefault(f => f == field) == null)
                     list.Add(field);
             }
         }
@@ -367,9 +439,36 @@ namespace GensokyoWPNACC.PacketMode.NetType
         /// <summary>
         /// 给定一个类型，给定一个字典，将类型的字段加入字典
         /// </summary>
-        public static void GetFields(Type type, IDictionary<Type, List<FieldInfo>> dic)
+        public static void GetFields(Type type, IDictionary<Type, List<MemberInfo>> dic, Func<MemberInfo, bool> where = null)
         {
-            foreach (var field in type.GetFields(CanReflectionWell()))
+            if (where == null)
+                where = f => true;
+            foreach (MemberInfo field in type.GetFields(CanReflectionWell()).Where(where))
+            {
+                if (dic.TryGetValue(type, out var value))
+                {
+                    if (value.FirstOrDefault(f => f == field) == null)
+                    {
+                        value.Add(field);
+                    }
+                }
+                else
+                {
+                    var list = new List<MemberInfo>();
+                    dic.Add(type, list);
+                    GetFields(type, list);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 给定一个类型，给定一个字典，将类型的字段加入字典
+        /// </summary>
+        public static void GetFields(Type type, IDictionary<Type, List<FieldInfo>> dic, Func<FieldInfo, bool> where = null)
+        {
+            if (where == null)
+                where = f => true;
+            foreach (var field in type.GetFields(CanReflectionWell()).Where(where))
             {
                 if(dic.TryGetValue(type, out var value))
                 {
@@ -384,6 +483,70 @@ namespace GensokyoWPNACC.PacketMode.NetType
                     dic.Add(type, list);
                     GetFields(type, list);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 给定一个类型，给定一个字典，将类型的属性加入字典
+        /// </summary>
+        public static void GetPropertys(Type type, IDictionary<Type, List<MemberInfo>> dic, Func<PropertyInfo, bool> where = null)
+        {
+            if (where == null)
+                where = f => true;
+            foreach (var property in type.GetProperties(CanReflectionWell()).Where(where))
+            {
+                if (dic.TryGetValue(type, out var value))
+                {
+                    if (value.FirstOrDefault(f => f == property) == null)
+                    {
+                        value.Add(property);
+                    }
+                }
+                else
+                {
+                    var list = new List<MemberInfo>();
+                    dic.Add(type, list);
+                    GetPropertys(type, list);
+                }
+            }
+        }
+
+
+
+        /// <summary>
+        /// 给定一个类型，给定一个字典，将类型的属性加入字典
+        /// </summary>
+        public static void GetPropertys(Type type, IDictionary<Type, List<PropertyInfo>> dic, Func<PropertyInfo, bool> where = null)
+        {
+            if (where == null)
+                where = f => true;
+            foreach (var property in type.GetProperties(CanReflectionWell()).Where(where))
+            {
+                if (dic.TryGetValue(type, out var value))
+                {
+                    if (value.FirstOrDefault(f => f == property) == null)
+                    {
+                        value.Add(property);
+                    }
+                }
+                else
+                {
+                    var list = new List<PropertyInfo>();
+                    dic.Add(type, list);
+                    GetPropertys(type, list);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 给定一个类型，给定一个列表，将类型的属性加入列表
+        /// </summary>
+        public static void GetPropertys(Type type, IList<MemberInfo> list)
+        {
+            foreach (var property in type.GetProperties(CanReflectionWell()))
+            {
+                if (list.FirstOrDefault(f => f == property) == null)
+                    list.Add(property);
             }
         }
 
@@ -407,29 +570,6 @@ namespace GensokyoWPNACC.PacketMode.NetType
             foreach (var property in type.GetProperties(CanReflectionWell()))
             {
                 set.Add(property);
-            }
-        }
-
-        /// <summary>
-        /// 给定一个类型，给定一个字典，将类型的字段加入字典
-        /// </summary>
-        public static void GetPropertys(Type type, IDictionary<Type, List<PropertyInfo>> dic)
-        {
-            foreach (var property in type.GetProperties(CanReflectionWell()))
-            {
-                if (dic.TryGetValue(type, out var value))
-                {
-                    if (value.FirstOrDefault(f => f == property) == null)
-                    {
-                        value.Add(property);
-                    }
-                }
-                else
-                {
-                    var list = new List<PropertyInfo>();
-                    dic.Add(type, list);
-                    GetPropertys(type, list);
-                }
             }
         }
 
